@@ -1,0 +1,110 @@
+#!perl
+
+use strict;
+use Getopt::Long;
+use MaterialsScript qw(:all);
+
+# Trajectory file containing the micelle
+my $trajectory = $Documents{"yourtrajectoryfile.xtd"};
+
+# Begin with this frame number
+my $startFrame = 1;
+
+# Results study table
+my $std = Documents->New("MicelleRadius.std");
+$std->ColumnHeading(0) = "Time (ps)";
+$std->ColumnHeading(1) = "Radius (Å)";
+$std->ColumnHeading(2) = "Number of sulphur Atoms"; #pick a unique atom from your headgroup, for example sulphur in my case
+
+# Initialize variables
+my @radii;
+my @numSulfurAtomsArray;
+
+# Loop over frames, calculate and record micelle radius
+for (my $frame = $startFrame; $frame <= $trajectory->Trajectory->NumFrames; $frame++) {
+    $trajectory->Trajectory->CurrentFrame = $frame;
+
+    # Get all atoms in the current frame
+    my $atoms = $trajectory->UnitCell->Atoms;
+    
+    # Collect sulfur atoms
+    my @sulfur_atoms;
+    foreach my $atom (@$atoms) {
+        if ($atom->ElementSymbol eq 'S') {
+            push @sulfur_atoms, $atom;
+        }
+    }
+
+    # Number of atoms containing sulfur
+    my $numSulfurAtoms = scalar @sulfur_atoms;
+    push @numSulfurAtomsArray, $numSulfurAtoms;
+
+    # If no sulfur atoms are found, skip this frame
+    next if $numSulfurAtoms == 0;
+
+    # Calculate the center of mass (centroid) of the micelle
+    my ($cx, $cy, $cz) = (0, 0, 0);
+    my $totalMass = 0;
+
+    foreach my $atom (@sulfur_atoms) {
+        my $mass = $atom->Mass;
+        $cx += $atom->X * $mass;
+        $cy += $atom->Y * $mass;
+        $cz += $atom->Z * $mass;
+        $totalMass += $mass;
+    }
+
+    $cx /= $totalMass;
+    $cy /= $totalMass;
+    $cz /= $totalMass;
+
+    # Calculate the radius as the average distance from the centroid
+    my $radius = 0;
+    my $numAtoms = scalar @sulfur_atoms;
+
+    foreach my $atom (@sulfur_atoms) {
+        my $dx = $atom->X - $cx;
+        my $dy = $atom->Y - $cy;
+        my $dz = $atom->Z - $cz;
+        $radius += sqrt($dx**2 + $dy**2 + $dz**2);
+    }
+
+    $radius /= $numAtoms;
+
+    # Store the radius for the current frame
+    push @radii, $radius;
+
+    # Write data to the study table
+    $std->Cell($frame - $startFrame, 0) = $trajectory->Trajectory->FrameTime;
+    $std->Cell($frame - $startFrame, 1) = $radius;
+    $std->Cell($frame - $startFrame, 2) = $numSulfurAtoms;
+}
+
+# Calculate average radius
+my $averageRadius = 0;
+$averageRadius += $_ for @radii;
+$averageRadius /= @radii;
+
+# Print average to the study table
+$std->Title = "Micelle Radius";
+$std->InsertSheet(0, "Averages");
+$std->ColumnHeading(0) = "Time (ps)";
+$std->ColumnHeading(1) = "Average Radius (Å)";
+$std->ColumnHeading(2) = "Average Number of Sulfur Atoms";
+$std->Cell(0, 0) = $trajectory->Trajectory->FrameTime;  # Store the time in the first cell
+$std->Cell(0, 1) = $averageRadius;
+$std->Cell(0, 2) = sprintf("%.2f", average(@numSulfurAtomsArray));  # Calculate and store the average sulfur atoms count
+
+# Save the study table
+$std->Save;
+
+print "Results have been saved to MicelleRadius.std\n";
+
+# Subroutine to calculate average
+sub average {
+    my @array = @_;
+    return 0 unless @array;
+    my $total = 0;
+    $total += $_ for @array;
+    return $total / @array;
+}
