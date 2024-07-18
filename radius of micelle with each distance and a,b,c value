@@ -1,0 +1,115 @@
+#!perl
+
+use strict;
+use Getopt::Long;
+use MaterialsScript qw(:all);
+
+# Trajectory file containing the micelle
+my $trajectory = $Documents{"yourtrajectoryfile.xtd"};
+
+# Begin with this frame number
+my $startFrame = 1;
+
+# Results study table
+my $std = Documents->New("MicelleRadius.std");
+$std->ColumnHeading(0) = "Time (ps)";
+$std->ColumnHeading(1) = "Semi-Major Axis (Å)";
+$std->ColumnHeading(2) = "Semi-Minor Axis (Å)";
+$std->ColumnHeading(3) = "Focus Distance (Å)";
+$std->ColumnHeading(4) = "Number of Sulfur Atoms";
+
+# Initialize variables
+my @radii;
+my @numSulfurAtomsArray;
+
+# Loop over frames, calculate and record micelle radius
+for (my $frame = $startFrame; $frame <= $trajectory->Trajectory->NumFrames; $frame++) {
+    $trajectory->Trajectory->CurrentFrame = $frame;
+
+    # Get all atoms in the current frame
+    my $atoms = $trajectory->UnitCell->Atoms;
+    
+    # Collect sulfur atoms
+    my @sulfur_atoms;
+    foreach my $atom (@$atoms) {
+        if ($atom->ElementSymbol eq 'S') {
+            push @sulfur_atoms, $atom;
+        }
+    }
+
+    # Number of atoms containing sulfur
+    my $numSulfurAtoms = scalar @sulfur_atoms;
+    push @numSulfurAtomsArray, $numSulfurAtoms;
+
+    # If no sulfur atoms are found, skip this frame
+    next if $numSulfurAtoms == 0;
+
+    # Calculate the center of mass (centroid) of the micelle
+    my ($cx, $cy, $cz) = (0, 0, 0);
+    my $totalMass = 0;
+
+    foreach my $atom (@sulfur_atoms) {
+        my $mass = $atom->Mass;
+        $cx += $atom->X * $mass;
+        $cy += $atom->Y * $mass;
+        $cz += $atom->Z * $mass;
+        $totalMass += $mass;
+    }
+
+    $cx /= $totalMass;
+    $cy /= $totalMass;
+    $cz /= $totalMass;
+
+    # Calculate distances from centroid and their variances
+    my @distances;
+    foreach my $atom (@sulfur_atoms) {
+        my $dx = $atom->X - $cx;
+        my $dy = $atom->Y - $cy;
+        my $dz = $atom->Z - $cz;
+        my $distance = sqrt($dx**2 + $dy**2 + $dz**2);
+        push @distances, $distance;
+
+        # Print the distance between centroid and the sulfur atom
+        print "Frame: $frame, Sulfur Atom: ", $atom->ID, ", Distance: $distance Å\n";
+    }
+
+    my $sum = 0;
+    $sum += $_ for @distances;
+    my $mean = $sum / @distances;
+
+    my $variance_sum = 0;
+    $variance_sum += ($_ - $mean)**2 for @distances;
+    my $variance = $variance_sum / @distances;
+    my $std_dev = sqrt($variance);
+
+    # Calculate semi-major axis (a) and semi-minor axis (b)
+    my $a = $mean + $std_dev;
+    my $b = $mean - $std_dev;
+
+    # Calculate the distance of the focus from the center (c)
+    my $c = sqrt($a**2 - $b**2);
+
+    # Write data to the study table
+    $std->Cell($frame - $startFrame, 0) = $trajectory->Trajectory->FrameTime;
+    $std->Cell($frame - $startFrame, 1) = $a;
+    $std->Cell($frame - $startFrame, 2) = $b;
+    $std->Cell($frame - $startFrame, 3) = $c;
+    $std->Cell($frame - $startFrame, 4) = $numSulfurAtoms;
+
+    # Print semi-major axis, semi-minor axis, and focus distance
+    print "Frame: $frame, Semi-Major Axis (a): $a Å, Semi-Minor Axis (b): $b Å, Focus Distance (c): $c Å\n";
+}
+
+# Save the study table
+$std->Save;
+
+print "Results have been saved to MicelleRadius.std\n";
+
+# Subroutine to calculate average
+sub average {
+    my @array = @_;
+    return 0 unless @array;
+    my $total = 0;
+    $total += $_ for @array;
+    return $total / @array;
+}
