@@ -1,2 +1,2 @@
 # radius-of-micelle
-calculating radius of micelle from molecular dynamic simulation
+calculating the radius of micelle from molecular dynamic simulation
