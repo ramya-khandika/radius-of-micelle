@@ -1,0 +1,150 @@
+#!/usr/bin/perl
+
+use strict;
+use Getopt::Long;
+use MaterialsScript qw(:all);
+
+# Trajectory file containing the micelle
+my $trajectory = $Documents{"laphs70w12k_10ns.xtd"};
+
+# Begin with this frame number
+my $startFrame = 10000;
+
+# Create study tables for each type of data
+my $dimensionsTable = Documents->New("MicelleDimensions.std");
+$dimensionsTable->ColumnHeading(0) = "Time (ps)";
+$dimensionsTable->ColumnHeading(1) = "Semi-Major Axis (Å)";
+$dimensionsTable->ColumnHeading(2) = "Semi-Minor Axis (Å)";
+$dimensionsTable->ColumnHeading(3) = "Focus Distance (Å)";
+$dimensionsTable->ColumnHeading(4) = "Eccentricity";
+$dimensionsTable->ColumnHeading(5) = "Number of Sulfur Atoms";
+
+my $distancesTable = Documents->New("SulfurAtomDistances.std");
+$distancesTable->ColumnHeading(0) = "Frame";
+$distancesTable->ColumnHeading(1) = "Sulfur Atom ID";
+$distancesTable->ColumnHeading(2) = "X Coordinate (Å)";
+$distancesTable->ColumnHeading(3) = "Y Coordinate (Å)";
+$distancesTable->ColumnHeading(4) = "Z Coordinate (Å)";
+$distancesTable->ColumnHeading(5) = "Distance (Å)";
+
+my $volumeSurfaceTable = Documents->New("VolumeSurfaceArea.std");
+$volumeSurfaceTable->ColumnHeading(0) = "Time (ps)";
+$volumeSurfaceTable->ColumnHeading(1) = "Volume (Å^3)";
+$volumeSurfaceTable->ColumnHeading(2) = "Surface Area (Å^2)";
+
+# Initialise variables
+my @numSulfurAtomsArray;
+
+# Loop over frames, calculate and record micelle dimensions
+for (my $frame = $startFrame; $frame <= $trajectory->Trajectory->NumFrames; $frame++) {
+    $trajectory->Trajectory->CurrentFrame = $frame;
+
+    # Get all atoms in the current frame
+    my $atoms = $trajectory->UnitCell->Atoms;
+    
+    # Collect sulfur atoms
+    my @sulfur_atoms;
+    foreach my $atom (@$atoms) {
+        if ($atom->ElementSymbol eq 'S') {
+            push @sulfur_atoms, $atom;
+        }
+    }
+
+    # Number of atoms containing sulfur
+    my $numSulfurAtoms = scalar @sulfur_atoms;
+    push @numSulfurAtomsArray, $numSulfurAtoms;
+
+    # If no sulfur atoms are found, skip this frame
+    next if $numSulfurAtoms == 0;
+
+    # Calculate the center of mass (centroid) of the micelle
+    my ($cx, $cy, $cz) = (0, 0, 0);
+    my $totalMass = 0;
+
+    foreach my $atom (@sulfur_atoms) {
+        my $mass = $atom->Mass;
+        $cx += $atom->X * $mass;
+        $cy += $atom->Y * $mass;
+        $cz += $atom->Z * $mass;
+        $totalMass += $mass;
+    }
+
+    $cx /= $totalMass;
+    $cy /= $totalMass;
+    $cz /= $totalMass;
+
+    # Calculate distances from centroid and their variances
+    my @distances;
+    foreach my $atom (@sulfur_atoms) {
+        my $dx = $atom->X - $cx;
+        my $dy = $atom->Y - $cy;
+        my $dz = $atom->Z - $cz;
+        my $distance = sqrt($dx**2 + $dy**2 + $dz**2);
+        push @distances, $distance;
+
+        # Store the distance between centroid and the sulfur atom in the distances table
+        my $distancesRow = $distancesTable->RowCount;
+        $distancesTable->Cell($distancesRow, 0) = $frame;
+        $distancesTable->Cell($distancesRow, 1) = $atom->ID;
+        $distancesTable->Cell($distancesRow, 2) = $atom->X;
+        $distancesTable->Cell($distancesRow, 3) = $atom->Y;
+        $distancesTable->Cell($distancesRow, 4) = $atom->Z;
+        $distancesTable->Cell($distancesRow, 5) = $distance;
+      
+    }
+
+    my $sum = 0;
+    $sum += $_ for @distances;
+    my $mean = $sum / @distances;
+
+    my $variance_sum = 0;
+    $variance_sum += ($_ - $mean)**2 for @distances;
+    my $variance = $variance_sum / @distances;
+    my $std_dev = sqrt($variance);
+
+    # Calculate semi-major axis (a) and semi-minor axis (b)
+    my $a = $mean + $std_dev;
+    my $b = $mean - $std_dev;
+
+    # Calculate the distance of the focus from the center (c)
+    my $c = sqrt($a**2 - $b**2);
+
+    # Calculate eccentricity (e)
+    my $eccentricity = sqrt(1 - ($b**2 / $a**2));
+
+    # Calculate volume (V) and surface area (S) of the ellipsoid
+    my $volume = (4/3) * 3.14159 * $a * $b * $c;
+    my $surface_area = 4 * 3.14159 * (($a*$b)**(1.6) + ($a*$c)**(1.6)) + (($b*$c)**1.6)**(1/1.6);
+
+    # Write data to the dimensions table
+    my $dimensionsRow = $dimensionsTable->RowCount;
+    $dimensionsTable->Cell($dimensionsRow, 0) = $trajectory->Trajectory->FrameTime;
+    $dimensionsTable->Cell($dimensionsRow, 1) = $a;
+    $dimensionsTable->Cell($dimensionsRow, 2) = $b;
+    $dimensionsTable->Cell($dimensionsRow, 3) = $c;
+    $dimensionsTable->Cell($dimensionsRow, 4) = $eccentricity;
+    $dimensionsTable->Cell($dimensionsRow, 5) = $numSulfurAtoms;
+
+    # Write data to the volume and surface area table
+    my $volumeSurfaceRow = $volumeSurfaceTable->RowCount;
+    $volumeSurfaceTable->Cell($volumeSurfaceRow, 0) = $trajectory->Trajectory->FrameTime;
+    $volumeSurfaceTable->Cell($volumeSurfaceRow, 1) = $volume;
+    $volumeSurfaceTable->Cell($volumeSurfaceRow, 2) = $surface_area;
+   
+}
+
+# Save the study tables
+$dimensionsTable->Save;
+$distancesTable->Save;
+$volumeSurfaceTable->Save;
+
+print "Results have been saved to MicelleDimensions.std, SulfurAtomDistances.std, and VolumeSurfaceArea.std\n";
+
+# Subroutine to calculate average
+sub average {
+    my @array = @_;
+    return 0 unless @array;
+    my $total = 0;
+    $total += $_ for @array;
+    return $total / @array;
+}
